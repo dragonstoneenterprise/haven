@@ -30,6 +30,8 @@ Repo: github.com/dragonstoneenterprise/floatless · Live: floatless-15d4.vercel.
 | Coinbase 4173 | 2% | $4,000 | Dragonstone | 0 |
 | Amazon prime (orphan) | 5% | $700 | none | 0 — keep archived |
 
+(Chase Sapphire 3856 is personal — no BFMR purchases, not tracked.)
+
 `card_statements` also has 64 rows for **2004** and 3 for **9413**; neither has an active card row yet.
 
 ### Blocker: Amex 2004
@@ -64,6 +66,19 @@ Other decisions:
 - **Cashback stored per-order** (`expected_cashback_pct/cents`), not looked up from card, so card changes don't alter historical math.
 - **Default account: Cryptic Dragon** (most-used). `is_default` was false on both; corrected to true on Cryptic Dragon.
 - **Multi-bank plan uses expand/contract**: new `bank_accounts` table (FK to `bfmr_account_id`) → backfill → cutover → verify → drop old columns. Hard rule: **never sum bank balances across LLCs** (would show $561.59 as one company's cash).
+
+### Dashboard metric definitions
+- **Safe to Spend** = bank balance − active orders owed (cost × qty)
+- **Locked In** = profit from paid/reconciled orders this month
+- **Pending** = profit from active orders not yet paid
+- **Profitable Credit** = available credit on cards with 5%+ cashback OR an active welcome bonus. Why it matters: BFMR margins are thin — only 5%+ cards make deals profitable; 2–3% cards break even or lose. Total available credit is misleading.
+- Welcome bonus fields on `cards`: `welcome_bonus_cents`, `welcome_bonus_spend_remaining_cents`
+- Statement closing alerts show cards closing within 7 days.
+
+### BFMR integration & pages
+- Deal Scanner polls `GET /api/v2/deals` every 10 min; Tracker Import upserts by `bfmr_reserve_id`, syncing qty/status/tracking/amazon_order_id.
+- Two BFMR accounts (Dragonstone + Cryptic Dragon), data scoped per account. Auto-scan cron runs on the default account only — second account pending.
+- Pages: Dashboard · /orders (+ /orders/[id]) · /cards · /evaluate · /get-paid · /reconcile · /deal-scanner · /tracker-import · /amazon-import · /amex-import (statements + bank balance) · /history.
 
 ### Schema
 `profiles` (user profile) · `orders` (all BFMR orders) · `cards` (credit cards + cashback rates) · `scanned_deals` (deal scanner results) · `bfmr_accounts` (multi-account credentials + bank balance) · `card_statements` (all card CSV transactions, persisted) · `amazon_orders` (Amazon order history, persisted; unique on `user_id + order_id + model_number`).
@@ -103,7 +118,11 @@ Cost correction applied: Jun 2026 Echo Dots were $29.99 in DB, actual $34.99 —
 3. Run Task 0 with real 2004 status + 9413 real limit ($500 / 2%, verify), using a verification query that can actually fail (each `card_statements.last4` maps to exactly one active card).
 4. Run Tier 3 Task 3 (welcome bonus fields; assert Profitable Credit = $700).
 5. Run multi-bank plan Tasks 1–5.
-6. Backlog: sync `current_balance_cents` (all $0 today, caveat needed in UI); Tier 1 safe-to-spend verification; Tier 2 bundle matching / 2nd-account scan / deal-scanner card view; Tier 4 ErrorBoundary / `getSession`→`getUser` / real cycle dates.
+6. Backlog by tier:
+   - **Tier 1 — trust the numbers:** verify Profitable Credit $700 against real Amex 5008 available credit; confirm safe-to-spend math; establish a routine to refresh bank balance via Amex Import; sync `current_balance_cents` (all $0 today, caveat needed in UI).
+   - **Tier 2 — close open loops:** fix bundle-item matching in tracker import; second BFMR account auto-scan on cron; deal-scanner card view.
+   - **Tier 4 — hardening:** React ErrorBoundary; `getSession()` → `getUser()` auth fix; real statement cycle dates (currently flat 30 days); `reconcile_orders` RPC divide-by-zero edge case; code splitting (1MB+ JS bundle).
+   - **Tier 5 — productize:** multi-tenant RLS audit; landing page + pricing; onboarding flow for new resellers; USPTO TESS search for the rename (see below).
 
 ### Rename track (separate)
 "Floatless" reads weak (negative framing, jargon). Dictionary finance words taken: Reckon (ASX/Accounting), Tally (TallyPrime), Ingot (INGOT Brokers); descriptive terms too generic → go with a coined word. Leading candidates:
