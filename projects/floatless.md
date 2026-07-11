@@ -14,7 +14,10 @@ Repo: github.com/dragonstoneenterprise/floatless · Live: floatless-15d4.vercel.
 ## Current State
 
 - Dashboard live: Bank $261.59 (Cryptic Dragon alone; Dragonstone $300 separate = $561.59 combined), Safe to Spend $3,219.18, Locked In $39.17, Profitable Credit $700.
-- Reconcile: 75/77 (97%).
+- Reconcile: 75/77 (97%) — the 2 remaining are iPad 9 orders with no purchase date.
+- Active orders: 0 (all dead deals cancelled).
+- Statement rows in Supabase: Amex 5008 (125), 2004 (64), Chase 5899 (95), Citi 4397 (25).
+- Edge functions: tracker-import v12, deal-scanner v5. Latest deploy clean (TypeScript fix for welcome bonus test fixtures unblocked 5 queued commits).
 - Tier 3 Tasks 1 & 2 done (nav cleanup 8→5 chips; orders pagination client-side 25/page). **Not committed.** Task 0 (card reconciliation) and Task 3 (welcome bonus fields) blocked.
 - Multi-bank-account plan written, not started.
 
@@ -31,6 +34,8 @@ Repo: github.com/dragonstoneenterprise/floatless · Live: floatless-15d4.vercel.
 
 ### Blocker: Amex 2004
 Assumed 2004 is 5008's renewed number, but the data contradicts it: 2004 and 5008 charged concurrently every month for 18 months, 2004 busier in early 2025, and each has independent payments (2004: 18 payments totaling $3,938.74) — looks like two separate accounts. One order matches only a 2004 charge; deleting those 64 rows drops reconcile 75/77 → 74/77.
+
+Supporting evidence from earlier records: 5008 replaced **4001** (same account, both 5%), not 2004 — and 2004 was rated 2%, a different cashback tier than 5008's 5%. Both points favor 2004 being a separate account.
 
 **Resolution:** open the Amex app — is 2004 an open account with its own balance/statement? 2 minutes, settles it.
 
@@ -59,6 +64,37 @@ Other decisions:
 - **Cashback stored per-order** (`expected_cashback_pct/cents`), not looked up from card, so card changes don't alter historical math.
 - **Default account: Cryptic Dragon** (most-used). `is_default` was false on both; corrected to true on Cryptic Dragon.
 - **Multi-bank plan uses expand/contract**: new `bank_accounts` table (FK to `bfmr_account_id`) → backfill → cutover → verify → drop old columns. Hard rule: **never sum bank balances across LLCs** (would show $561.59 as one company's cash).
+
+### Schema
+`profiles` (user profile) · `orders` (all BFMR orders) · `cards` (credit cards + cashback rates) · `scanned_deals` (deal scanner results) · `bfmr_accounts` (multi-account credentials + bank balance) · `card_statements` (all card CSV transactions, persisted) · `amazon_orders` (Amazon order history, persisted; unique on `user_id + order_id + model_number`).
+
+Orders store **per-unit** money; UI multiplies by `qty` everywhere.
+
+### Cashback rates
+| Card | Rate | Note |
+|---|---|---|
+| Amex 5008 | 5% | main card; replaced 4001 (same account, also 5%) |
+| Chase Visa 5899 | 3% | corrected from 5% |
+| Amex 2004 | 2% | see blocker above |
+| Citi 4397 | 2% | |
+| US Bank 9413 | 2% | used for Amazon gift card purchases |
+
+Key insight: gift-card orders still earn 5% because the gift cards were purchased on Amex 5008.
+
+### Reconciliation — 5 matching methods, priority order
+1. Amazon order ID — exact match
+2. TBA tracking number — proof of shipment; covers gift-card-paid orders (**the key unlock: 77% → 97% verified**)
+3. Card charge amount ±$1 within 14 days symmetric
+4. Item model number — matches Amazon CSV
+5. Group charge — sums same-day orders vs bundled card charge ±$2
+
+Cost correction applied: Jun 2026 Echo Dots were $29.99 in DB, actual $34.99 — fixed.
+
+### History (done, kept for context)
+- 97 duplicate ghost orders from early imports deleted via SQL.
+- Dead orders cancelled (iPad 9 Silver/Space Gray, Watch SE 2024 44mm Midnight, Watch Series 10 — no tracking, no `paid_at`); they were inflating safe-to-spend by ~$2,051.
+- Order fields added over time: `amazon_order_id` (tracker-import v11, shown on OrderCard), `tracking_number` (v12, shown on Get Paid page), `verified` boolean (reconcile page). Edit unlocked on all statuses to fix card assignments on historical orders.
+- Universal CSV parser auto-detects Amex/Chase/Citi/any bank; keyword + date-range filters on Amex Import page; multi-card balance sum across all cards.
 
 ## Next Steps
 
