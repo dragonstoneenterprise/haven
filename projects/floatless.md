@@ -8,7 +8,9 @@ stage: projects
 
 BFMR (buy-for-me retail) fulfillment tracker for the reselling business. Tracks orders, matches them against credit card statements, surfaces real profit/cashback/payout. Two LLCs with separate books: **Dragonstone Enterprises** and **Cryptic Dragon**.
 
-Stack: React PWA + Supabase + Vercel.
+Positioning: a **deal-ops tool**, not a generic accounting app (Wave does that). It answers "should I take this deal?" and "where am I on credit?" — float exposure, per-card cashback, safe-to-spend.
+
+Stack: React 18 + Vite + TS strict + Tailwind + shadcn/ui + TanStack Query + date-fns, Supabase (Auth/Postgres/RLS/Edge Functions, eu-central-1) + Vercel PWA. Secrets in macOS Keychain (no .env files). Key docs in repo root: STATE.md, TASKS.md, BUILD.md.
 Repo: github.com/dragonstoneenterprise/floatless · Live: floatless-15d4.vercel.app · Supabase: plzneojxlqleaeprbygk · Local: ~/Desktop/floatless
 
 ## Current State
@@ -58,6 +60,15 @@ Architecture invariants:
 - Never hard-delete a card — archive via `archived_at`.
 - All data scoped per `bfmr_account_id`.
 - Statements & Amazon orders persist to Supabase, never re-upload.
+
+Founding decisions (Tasks 1–13.5 era):
+- **"For me, not hypothetical customers"** — built for the operator's actual BFMR business; no invoicing, no multi-user, no accountant access. Speculating about other users → feature creep → worse Wave. *(Later partially relaxed by the Tier 5 productize track — multi-tenant/landing/onboarding — which reverses this deliberately.)*
+- **Deal-decision tool, not finance app** — Wave and Floatless aren't competitors. Planned human-language rename: "Buying power" not "Safe to spend," "Cash tied up" not "Float risk," "Mark paid" not "Reconcile." *(Open thread: dashboard still says "Safe to Spend" — this rename was never shipped.)*
+- **No Plaid, no bank sync, no expense categorization** — Plaid stubbed, do not activate. BFMR is loan → buy → ship → get paid; bank sync solves a problem this workflow doesn't have.
+- **Reconciliation is a Postgres RPC** (SECURITY INVOKER, atomic): one lump payout distributed proportionally across orders, cashback usage upserted per card/merchant/quarter.
+- **Screenshot order extraction** via Haiku vision in an edge function — client-side image downscale, never logs/stores images.
+- **Float risk wired to `expected_payout_at`** — BFMR reimburses ~2 weeks after receipt, so safety math must model that delay. Known gap: past-due payouts are treated as arrived, which *underestimates* risk when BFMR is late (overdue-payout indicator is the fix).
+- **UI direction: dark glass + Mercury restraint** — Inter, deep navy (224° 40% 4%), translucent cards, big numbers, one accent, tabular type, no emoji.
 
 Original build decisions (early era, still in force):
 - **Official BFMR API over bookmarklet/scraping** — no ToS risk, documented, key-based auth, intended integration path.
@@ -135,7 +146,7 @@ Cost correction applied: Jun 2026 Echo Dots were $29.99 in DB, actual $34.99 —
 6. Backlog by tier:
    - **Tier 1 — trust the numbers:** verify Profitable Credit $700 against real Amex 5008 available credit; confirm safe-to-spend math; establish a routine to refresh bank balance via Amex Import; sync `current_balance_cents` (all $0 today, caveat needed in UI).
    - **Tier 2 — close open loops:** fix bundle-item matching in tracker import; second BFMR account auto-scan on cron; deal-scanner card view.
-   - **Tier 4 — hardening:** React ErrorBoundary; `getSession()` → `getUser()` auth fix; real statement cycle dates (currently flat 30 days); `reconcile_orders` RPC divide-by-zero edge case; code splitting (1MB+ JS bundle); anon role has blanket SELECT on all tables (RLS-gated but flagged).
+   - **Tier 4 — hardening:** React ErrorBoundary; `getSession()` → `getUser()` auth fix; real statement cycle dates (currently flat 30 days); `reconcile_orders` RPC divide-by-zero edge case; code splitting (1MB+ JS bundle); anon role has blanket SELECT on all tables (RLS-gated but flagged); overdue-payout indicator (float risk currently assumes past-due payouts arrived).
    - **Tier 5 — productize:** multi-tenant RLS audit; landing page + pricing; onboarding flow for new resellers; USPTO TESS search for the rename (see below).
 
 ### Rename track (separate)
