@@ -9,7 +9,7 @@ stage: projects
 BFMR (buy-for-me retail) fulfillment tracker for the reselling business. Tracks orders, matches them against credit card statements, surfaces real profit/cashback/payout. Two LLCs with separate books: **Dragonstone Enterprises** and **Cryptic Dragon**.
 
 Stack: React PWA + Supabase + Vercel.
-Repo: github.com/dragonstoneenterprise/floatless · Live: floatless-15d4.vercel.app · Supabase: plzneojxlqleaeprbygk
+Repo: github.com/dragonstoneenterprise/floatless · Live: floatless-15d4.vercel.app · Supabase: plzneojxlqleaeprbygk · Local: ~/Desktop/floatless
 
 ## Current State
 
@@ -59,6 +59,16 @@ Architecture invariants:
 - All data scoped per `bfmr_account_id`.
 - Statements & Amazon orders persist to Supabase, never re-upload.
 
+Original build decisions (early era, still in force):
+- **Official BFMR API over bookmarklet/scraping** — no ToS risk, documented, key-based auth, intended integration path.
+- **Edge Functions for scanner/import** — serverless, already in stack, secrets management built in.
+- **10-min cron for deal scanner** — conservative vs undocumented rate limits (18 API calls/hour); **manual sync only for tracker import** — order frequency too low to need cron.
+- **`bfmr_reserve_id` as match key** — stable from reservation through payment, unlike `order_no`.
+- **Special-deals section** — Chase statement credits are real opportunities but need manual eval.
+- **Active filter = pending_purchase / purchased / awaiting_payment only** — paid/cancelled clutter the view.
+- **`expected_payout_at` always editable, even on paid orders** — transactions clear pending after the fact.
+- **Cashback computed at import time** — imported orders get the same profit math as manual orders.
+
 Other decisions:
 - **Profitable Credit $700 is correct** — only one active 5%+ card (5008, $700 limit, $0 balance). The earlier "$1,400" was wrong: Amazon prime misread as a counted duplicate; it's orphaned (`bfmr_account_id = NULL`, 0 orders) and invisible to the app. *Lesson: always check `bfmr_account_id` + order counts before calling a row a duplicate.*
 - **Orders pagination is client-side**, not server `.range()` — filters/badges/summaries compute over the full 104-order set; server pagination would scope them to 25 visible rows and break everything. Perf case is thin at 104 orders.
@@ -76,12 +86,16 @@ Other decisions:
 - Statement closing alerts show cards closing within 7 days.
 
 ### BFMR integration & pages
-- Deal Scanner polls `GET /api/v2/deals` every 10 min; Tracker Import upserts by `bfmr_reserve_id`, syncing qty/status/tracking/amazon_order_id.
+- Official API at api.bfmr.com, auth via `API-KEY` + `API-SECRET` headers. Per-account credentials live in `bfmr_accounts` (RLS-protected); Supabase secrets `BFMR_API_KEY`/`BFMR_API_SECRET` are the default-account fallback for cron.
+- **Deal Scanner** polls `GET /api/v2/deals` (`in_stock=1`) every 10 min. Margin = (payout − cost + cashback) / cost using the best card's effective BPS; deals ≥2% margin shown sorted by margin desc. Special-deals section for non-standard offers (e.g. Chase statement credits with $0.01 retail placeholder). Dismiss button + manual Scan Now.
+- **Tracker Import** pulls `GET /api/v2/my-tracker` (all pages), upserts by `bfmr_reserve_id`, syncing qty/status/tracking/amazon_order_id. Field mapping: `item_name`→title, `qty` (string→int), `retailer_links[0].retailer`, `item_model_number`→notes. Manual sync only.
+- Write-back to BFMR (`POST /api/v2/my-tracker` — order numbers/tracking) exists in the API but is **intentionally deferred**; Floatless stays read-only for now.
 - Two BFMR accounts (Dragonstone + Cryptic Dragon), data scoped per account. Auto-scan cron runs on the default account only — second account pending.
+- Cards support points cards: `is_points_card` + `point_value_cents`; earn rate × point value = effective % for deal math.
 - Pages: Dashboard · /orders (+ /orders/[id]) · /cards · /evaluate · /get-paid · /reconcile · /deal-scanner · /tracker-import · /amazon-import · /amex-import (statements + bank balance) · /history.
 
 ### Schema
-`profiles` (user profile) · `orders` (all BFMR orders) · `cards` (credit cards + cashback rates) · `scanned_deals` (deal scanner results) · `bfmr_accounts` (multi-account credentials + bank balance) · `card_statements` (all card CSV transactions, persisted) · `amazon_orders` (Amazon order history, persisted; unique on `user_id + order_id + model_number`).
+`profiles` (user profile; `bank_name` legacy) · `orders` (all BFMR orders: `cost_cents`, `payout_cents`, `cashback_pct`, `expected_cashback_cents`, `expected_profit_cents`, `status`, `bfmr_reserve_id`, `bfmr_purchase_id`, `imported_from_bfmr`, `bfmr_account_id`, `qty`) · `cards` (`default_cashback_pct`, `is_points_card`, `point_value_cents`, `bfmr_account_id`) · `scanned_deals` (`deal_id`, `margin_bps`, `is_special_deal`, `dismissed`, `bfmr_account_id`) · `bfmr_accounts` (`name`, `api_key`, `api_secret`, `bank_balance_cents`, `bank_name`, `is_default`) · `card_statements` (all card CSV transactions, persisted) · `amazon_orders` (Amazon order history, persisted; unique on `user_id + order_id + model_number`). Migrations 001–010 through the multi-account era; pre-010 JSON backups at `~/Desktop/floatless/backups/`.
 
 Orders store **per-unit** money; UI multiplies by `qty` everywhere.
 
@@ -121,7 +135,7 @@ Cost correction applied: Jun 2026 Echo Dots were $29.99 in DB, actual $34.99 —
 6. Backlog by tier:
    - **Tier 1 — trust the numbers:** verify Profitable Credit $700 against real Amex 5008 available credit; confirm safe-to-spend math; establish a routine to refresh bank balance via Amex Import; sync `current_balance_cents` (all $0 today, caveat needed in UI).
    - **Tier 2 — close open loops:** fix bundle-item matching in tracker import; second BFMR account auto-scan on cron; deal-scanner card view.
-   - **Tier 4 — hardening:** React ErrorBoundary; `getSession()` → `getUser()` auth fix; real statement cycle dates (currently flat 30 days); `reconcile_orders` RPC divide-by-zero edge case; code splitting (1MB+ JS bundle).
+   - **Tier 4 — hardening:** React ErrorBoundary; `getSession()` → `getUser()` auth fix; real statement cycle dates (currently flat 30 days); `reconcile_orders` RPC divide-by-zero edge case; code splitting (1MB+ JS bundle); anon role has blanket SELECT on all tables (RLS-gated but flagged).
    - **Tier 5 — productize:** multi-tenant RLS audit; landing page + pricing; onboarding flow for new resellers; USPTO TESS search for the rename (see below).
 
 ### Rename track (separate)
