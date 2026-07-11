@@ -1,6 +1,6 @@
 ---
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-11
 ---
 
 # output/ — shipped
@@ -11,4 +11,5 @@ Items track harvest state in frontmatter (`harvested: true/false`); `/harvest` p
 
 ## Contents
 
-*(empty — nothing shipped yet)*
+- [[isobar-v2-migration-and-reliability-overhaul]] — harvested
+- [[floatless-reconciliation-and-cashback-system]] — harvested
